@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+*.archive binary
+*.sqlite3 binary
+*.zip binary
+*.rar binary

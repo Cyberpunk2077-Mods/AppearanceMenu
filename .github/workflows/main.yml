@@ -1,0 +1,88 @@
+name: Validate and package
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (defaults to the commit SHA)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TARGET_PLATFORM: windows
+  TARGET_ARCH: x64
+  # Reserved, disabled targets: windows_arm, macos_x64, macos_arm, linux_x64, linux_arm.
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Lua compiler
+        run: sudo apt-get update && sudo apt-get install --yes lua5.4
+
+      - name: Validate source tree
+        run: python scripts/check.py
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            version="$REQUESTED_VERSION"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="0.0.0"
+          fi
+          echo "value=${version#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            args+=(--development)
+          fi
+          python scripts/build.py --version "${{ steps.version.outputs.value }}" "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appearance-menu-mod-${{ steps.version.outputs.value }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: appearance-menu-mod-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --generate-notes --verify-tag
