@@ -29,6 +29,8 @@ jobs:
       version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -51,7 +53,15 @@ jobs:
           elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="$GITHUB_REF_NAME"
           else
-            version="0.0.0"
+            version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+            if [[ -z "$version" ]]; then
+              version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]' | head -n1)"
+            fi
+            version="${version#v}"
+            if [[ -z "$version" ]]; then
+              version="$(sed -n 's/.*AMM\.currentVersion = "\([^"]*\)".*/\1/p' src/AppearanceMenuMod/init.lua | head -n1)"
+            fi
+            version="${version:-0.0.0}"
           fi
           echo "value=${version#v}" >> "$GITHUB_OUTPUT"
 
