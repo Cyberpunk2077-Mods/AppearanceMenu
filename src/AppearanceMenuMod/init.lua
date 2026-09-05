@@ -170,6 +170,8 @@ function AMM:new()
 	 AMM.currentLanguage = require("Localization/en_US.lua")
 	 AMM.availableLanguages = AMM:GetLocalizationLanguages()
 	 AMM.selectedLanguage = AMM:GetLanguageIndex("en_US")
+	 AMM.languageConfigured = false
+	 AMM.pendingLanguageDetection = false
 
 	 -- Load Modules --
 	 AMM.API = require("Collabs/API.lua")
@@ -199,6 +201,15 @@ function AMM:new()
 		 	AMM.CodewareVersion = parseVersion(Codeware.Version())
 		 else
 			log("Codeware isn't loaded.")
+		 end
+
+		 -- Detect game UI language only when user has never saved a language choice
+		 if AMM.pendingLanguageDetection or not AMM.languageConfigured then
+			 local detected = AMM:DetectGameLanguage()
+			 AMM.selectedLanguage = AMM:GetLanguageIndex(detected)
+			 AMM.languageConfigured = true
+			 AMM.pendingLanguageDetection = false
+			 AMM:ExportUserData()
 		 end
 
 		 if AMM.Debug ~= '' then
@@ -2111,6 +2122,8 @@ function AMM:DrawUISettingsTab(style)
 					if ImGui.Selectable(lang.name.."##"..i, (lang == selectedLanguage.name)) then
 						AMM.selectedLanguage = i
 						AMM.currentLanguage = lang.strings
+						AMM.languageConfigured = true
+						AMM.pendingLanguageDetection = false
 						AMM:InitializeModules()
 						AMM:UpdateSettings()
 					end
@@ -2558,7 +2571,21 @@ function AMM:ImportUserData()
 				self.Poses.history = userData['posesHistory'] or {}
 				self.Tools.selectedNibblesEntity = userData['selectedNibblesEntity'] or 1
 				self.Tools.replacerVersion = userData['replacerVersion']
-				self.selectedLanguage = self:GetLanguageIndex(userData['selectedLanguage'] or "en_US")
+				if userData['selectedLanguage'] ~= nil then
+					self.selectedLanguage = self:GetLanguageIndex(userData['selectedLanguage'])
+					-- Existing saves without languageConfigured keep their choice; explicit false re-detects
+					if userData['languageConfigured'] == false then
+						self.pendingLanguageDetection = true
+						self.languageConfigured = false
+					else
+						self.languageConfigured = true
+						self.pendingLanguageDetection = false
+					end
+				else
+					-- No saved language: detect game interface language on first open (in onInit)
+					self.pendingLanguageDetection = true
+					self.languageConfigured = false
+				end
 				self.UI.style.listScaleFactor = userData['listScaleFactor'] or 0
 				self.Props.presetTriggerDistance = userData['presetTriggerDistance'] or 60
 				self.Tools.favoriteExpressions = userData['favoriteExpressions'] or {}
@@ -2630,6 +2657,12 @@ function AMM:ImportUserData()
 				end
 			end
 		end
+	end
+
+	-- No user.json yet: detect game language on first open
+	if not file then
+		AMM.pendingLanguageDetection = true
+		AMM.languageConfigured = false
 	end
 
 	AMM.importInProgress = false
@@ -2712,6 +2745,7 @@ function AMM:ExportUserData()
 		userData['selectedNibblesEntity'] = self.Tools.selectedNibblesEntity
 		userData['replacerVersion'] = self.Tools.replacerVersion
 		userData['selectedLanguage'] = self.availableLanguages[self.selectedLanguage].name or "en_US"
+		userData['languageConfigured'] = self.languageConfigured == true
 		userData['listScaleFactor'] = self.UI.style.listScaleFactor
 		userData['presetTriggerDistance'] = self.Props.presetTriggerDistance
 		userData['favoriteExpressions'] = self.Tools.favoriteExpressions
@@ -6132,6 +6166,90 @@ function AMM:GetLanguageIndex(langStr)
 	
   	-- If "en_US" is somehow missing, return the first available language
 	return 1
+end
+
+-- Map Cyberpunk interface language codes (en-us, zh-cn, ...) to Localization/*.lua locale names.
+-- Prefer Codeware LocalizationSystem when available; fall back to SettingsSystem /language/OnScreen.
+function AMM:DetectGameLanguage()
+	local gameCode = nil
+
+	if Codeware then
+		local ok, result = pcall(function()
+			local container = Game.GetScriptableSystemsContainer()
+			if not container then return nil end
+			local system = container:Get(CName.new("Codeware.Localization.LocalizationSystem"))
+			if not system then return nil end
+			local langName = system:GetInterfaceLanguage()
+			if not langName then return nil end
+			return NameToString(langName)
+		end)
+		if ok and result and result ~= "" then
+			gameCode = result
+		end
+	end
+
+	if not gameCode then
+		local ok, result = pcall(function()
+			local value = GameSettings.Get("/language/OnScreen")
+			if value == nil then return nil end
+			if type(value) == "userdata" then
+				return NameToString(value)
+			end
+			return tostring(value)
+		end)
+		if ok and result and result ~= "" then
+			gameCode = result
+		end
+	end
+
+	if not gameCode then
+		return "en_US"
+	end
+
+	gameCode = string.lower(tostring(gameCode))
+
+	local map = {
+		["ar-ar"] = "ar_AR",
+		["cz-cz"] = "cz_CZ",
+		["de-de"] = "de_DE",
+		["en-us"] = "en_US",
+		["es-es"] = "es_ES",
+		["es-mx"] = "es_MX",
+		["fr-fr"] = "fr_FR",
+		["hu-hu"] = "hu_HU",
+		["it-it"] = "it_IT",
+		["jp-jp"] = "jp_JP",
+		["kr-kr"] = "kr_KR",
+		["pl-pl"] = "pl_PL",
+		["pt-br"] = "pt_BR",
+		["ru-ru"] = "ru_RU",
+		["th-th"] = "th_TH",
+		["tr-tr"] = "tr_TR",
+		["ua-ua"] = "ua_UA",
+		["zh-cn"] = "zh_CN",
+		["zh-tw"] = "zh_TW",
+	}
+
+	local locale = map[gameCode]
+	if not locale then
+		-- Also accept already-normalized names (en_US) or bare codes (en)
+		local normalized = gameCode:gsub("-", "_")
+		for _, lang in ipairs(AMM.availableLanguages) do
+			if string.lower(lang.name) == normalized then
+				return lang.name
+			end
+		end
+		return "en_US"
+	end
+
+	-- Ensure the Localization file exists among available languages
+	for _, lang in ipairs(AMM.availableLanguages) do
+		if lang.name == locale then
+			return locale
+		end
+	end
+
+	return "en_US"
 end
 
 function AMM:GetLocalizationLanguages()
