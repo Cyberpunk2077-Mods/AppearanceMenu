@@ -53,13 +53,14 @@ jobs:
           elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="$GITHUB_REF_NAME"
           else
-            version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+            # grep exits 1 when no tags match; Actions uses pipefail, so tolerate that.
+            version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
             if [[ -z "$version" ]]; then
-              version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]' | head -n1)"
+              version="$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]' | head -n1 || true)"
             fi
             version="${version#v}"
             if [[ -z "$version" ]]; then
-              version="$(sed -n 's/.*AMM\.currentVersion = "\([^"]*\)".*/\1/p' src/AppearanceMenuMod/init.lua | head -n1)"
+              version="$(sed -n 's/.*AMM\.currentVersion = "\([^"]*\)".*/\1/p' src/AppearanceMenuMod/init.lua | head -n1 || true)"
             fi
             version="${version:-0.0.0}"
           fi
