@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -64,11 +66,37 @@ def validate_lua() -> list[str]:
         print("warning: Lua compiler not found; skipped Lua syntax validation", file=sys.stderr)
         return []
 
+    # CET accepts C-style integer suffixes (1ULL, 0xFU); stock luac5.4 does not.
+    # Normalize only for syntax checking — source files are left unchanged.
+    uint64_max_re = re.compile(r"\b18446744073709551615U?LL\b")
+    suffix_re = re.compile(r"(?<=\d)(?:U?LL|U)\b")
+
     errors: list[str] = []
     for path in sorted(ROOT.rglob("*.lua")):
         if any(part in {"build", "dist"} for part in path.parts):
             continue
-        result = subprocess.run([compiler, "-p", str(path)], capture_output=True, text=True, check=False)
+        try:
+            source = path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as error:
+            errors.append(f"invalid Lua {path.relative_to(ROOT)}: {error}")
+            continue
+
+        normalized = uint64_max_re.sub("-1", source)
+        normalized = suffix_re.sub("", normalized)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".lua", delete=False) as handle:
+            handle.write(normalized)
+            temp_path = Path(handle.name)
+
+        try:
+            result = subprocess.run(
+                [compiler, "-p", str(temp_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
         if result.returncode:
             errors.append(f"invalid Lua {path.relative_to(ROOT)}: {result.stderr.strip()}")
     return errors
